@@ -233,6 +233,60 @@ fn serialize_initgroups(groups: Vec<Gid>) -> Result<Vec<u8>> {
     Ok(result)
 }
 
+// Send a host q
+// glibc does memcpy the following:
+// hst->h_name, h_name_len
+// h_aliases_len, (uint32 * h_aliases_cnt)
+// The normal addresses first
+// Then the aliases.
+//
+// Serialization routine:
+// 1. Serialize header
+// 2. Write hname as a c string
+// 3. Write u32 vec containing the aliases sizes
+// 4. Write result Addr as a c string. Length == cstring length (the length of this has been
+//    communicated in the header already)
+// 5. Iterate on the aliases, serializing them one by one according to their size written in step 3.
+//    The number of aliases
+// 6. Size sanity check
+//fn serialize_hosts(hosts: Vec<Host>) -> Result<Vec<u8>> {
+//    Ok(Vec[])
+//}
+
+// NOTE: seems hostent is only used internally to pass stuff around in glibc
+// The hostent structure is defined in <netdb.h> as follows:
+//
+//     struct hostent {
+//         char  *h_name;            /* official name of host */
+//         char **h_aliases;         /* alias list */
+//         int    h_addrtype;        /* host address type */
+//         int    h_length;          /* length of address */
+//         char **h_addr_list;       /* list of addresses */
+//     }
+//     #define h_addr h_addr_list[0] /* for backward compatibility */
+//
+// The members of the hostent structure are:
+//
+// h_name The official name of the host.
+//
+// h_aliases
+//        An array of alternative names for the host, terminated by
+//        a null pointer.
+//
+// h_addrtype
+//        The type of address; always AF_INET or AF_INET6 at
+//        present.
+//
+// h_length
+//        The length of the address in bytes.
+//
+// h_addr_list
+//        An array of pointers to network addresses for the host (in
+//        network byte order), terminated by a null pointer.
+//
+// h_addr The first address in h_addr_list for backward
+//        compatibility.
+
 #[cfg(test)]
 mod test {
     use super::*;
