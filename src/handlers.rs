@@ -163,8 +163,10 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                     // see s
                     // filter the result vec?
                     flags: 0,
-                }),
+                }), //
             );
+
+            let _addr = resp_addrs.next()?; // Hmm, Vec<u8>, rly? I don't think we want to use getaddrinfo like that.
 
             // TODO: serialize and return the result
             Ok(vec![])
@@ -284,6 +286,32 @@ fn serialize_initgroups(groups: Vec<Gid>) -> Result<Vec<u8>> {
         result.extend_from_slice(&i32::to_ne_bytes(group.as_raw().try_into()?));
     }
 
+    Ok(result)
+}
+
+/// Send a set of IP addresses (gethostbyname response) back to the
+/// client.
+fn serialize_ipaddrs(ips: Vec<IpAddr>) -> Result<Vec<u8>> {
+    let mut result = vec![];
+    let header = protocol::HstResponseHeader {
+        version: protocol::VERSION,
+        found: 1,
+        h_name_len: 0,// hname?,
+        h_aliases_cnt: 0,
+        h_addrtype: 0,
+        h_length: 0,// ips.len().try_into()? - nope,
+        h_addr_list_cnt: 0,
+        error: 0,
+    };
+    result.extend_from_slice(header.as_slice());
+    // TODO: serialize payload
+    // 1. hname string
+    // 2. uint32 table containing the lengths of each alias
+    // 3. Iterating on the result addr, serializing them. Each part is
+    //    h_length wide. Question: what's hlength size?
+    // 4. Iterating on the aliases, serializing them one by one
+    //    according to their size we previously sent
+    // 5. Size sanity check
     Ok(result)
 }
 
