@@ -111,6 +111,7 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             };
             serialize_initgroups(groups)
         }
+        // not implemented.
         RequestType::GETHOSTBYADDR
         | RequestType::GETHOSTBYADDRv6
         | RequestType::GETHOSTBYNAME
