@@ -182,6 +182,53 @@ impl InitgroupsResponseHeader {
     }
 }
 
+// Structure sent in reply to hosts query.
+//
+// example for a not found header:
+// static const hst_response_header notfound =
+// {
+//   .version = NSCD_VERSION,
+//   .found = 0,
+//   .h_name_len = 0,
+//   .h_aliases_cnt = 0,
+//   .h_addrtype = -1,
+//   .h_length = -1,
+//   .h_addr_list_cnt = 0,
+//   .error = HOST_NOT_FOUND
+// };
+//
+// example for a found header:
+// .resp.version = NSCD_VERSION;
+// .resp.found = 1;
+// .resp.h_name_len = h_name_len;
+// .resp.h_aliases_cnt = h_aliases_cnt;
+// .resp.h_addrtype = hst->h_addrtype;
+// .resp.h_length = hst->h_length;
+// .resp.h_addr_list_cnt = h_addr_list_cnt;
+// .resp.error = NETDB_SUCCESS;
+//
+//  hst_response_header
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct HstResponseHeader {
+    pub version: c_int,
+    pub found: c_int,         // Set to 0 or 1, "boolean"
+    pub h_name_len: c_int,    // length of h_name (?), which comes first in the payload
+    pub h_aliases_cnt: c_int, // number of aliases in payload (?)
+    pub h_addrtype: c_int,
+    pub h_length: c_int,
+    pub h_addr_list_cnt: c_int,
+    pub error: c_int,
+}
+
+impl HstResponseHeader {
+    // Serialize the header to bytes
+    pub fn as_slice(&self) -> &[u8] {
+        let p = self as *const _ as *const u8;
+        unsafe { std::slice::from_raw_parts(p, size_of::<Self>()) }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
