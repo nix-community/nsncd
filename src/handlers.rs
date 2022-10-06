@@ -16,10 +16,13 @@
 
 use std::convert::TryInto;
 use std::ffi::{CStr, CString};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::unix::ffi::OsStrExt;
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use atoi::atoi;
+use dns_lookup::{getaddrinfo, lookup_addr, lookup_host, AddrInfoHints};
 use nix::unistd::{getgrouplist, Gid, Group, Uid, User};
 use slog::{debug, error, Logger};
 
@@ -111,12 +114,63 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             };
             serialize_initgroups(groups)
         }
+        // lookup hostname for Ipv4 address
+        RequestType::GETHOSTBYADDR => {
+            let key = CStr::from_bytes_with_nul(request.key)?.to_str()?;
+            let addr = Ipv4Addr::from_str(key)?;
+            debug!(log, "got address"; "addr" => ?addr);
+
+            // do the request
+            let resp = lookup_addr(&IpAddr::V4(addr))?;
+
+            // TODO: serialize and return the result
+            Ok(vec![])
+        }
+        // lookup hostname for Ipv6 address
+        RequestType::GETHOSTBYADDRv6 => {
+            let key = CStr::from_bytes_with_nul(request.key)?.to_str()?;
+            let addr = Ipv6Addr::from_str(key)?;
+            debug!(log, "got address"; "addr" => ?addr);
+
+            // do the request
+            let resp = lookup_addr(&IpAddr::V6(addr))?;
+
+            // TODO: serialize and return the result
+            Ok(vec![])
+        }
+        RequestType::GETHOSTBYNAME => {
+            let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
+            debug!(log, "got hostname"; "hostname" => ?hostname);
+
+            // do the request
+            let resp_addrs = lookup_host(hostname)?;
+
+            // TODO: serialize and return the result
+            Ok(vec![])
+        }
+        RequestType::GETHOSTBYNAMEv6 => {
+            let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
+            debug!(log, "got hostname"; "hostname" => ?hostname);
+
+            // do the request. e use getaddrinfo and hint we only want v6.
+            let resp_addrs = getaddrinfo(
+                Some(hostname),
+                None,
+                Some(AddrInfoHints {
+                    socktype: 0,
+                    protocol: 0,
+                    address: 26, // TODO: this is terrible. Can we get this from a crate, or just
+                    // see s
+                    // filter the result vec?
+                    flags: 0,
+                }),
+            );
+
+            // TODO: serialize and return the result
+            Ok(vec![])
+        }
         // not implemented.
-        RequestType::GETHOSTBYADDR
-        | RequestType::GETHOSTBYADDRv6
-        | RequestType::GETHOSTBYNAME
-        | RequestType::GETHOSTBYNAMEv6
-        | RequestType::SHUTDOWN
+        RequestType::SHUTDOWN
         | RequestType::GETSTAT
         | RequestType::INVALIDATE
         | RequestType::GETFDPW
