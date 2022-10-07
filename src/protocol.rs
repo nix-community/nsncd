@@ -319,19 +319,4 @@ mod test {
 
         assert_eq!(header.as_slice(), expected);
     }
-
-    #[test]
-    // this is just a test to make sure dns_lookup uses glibc resolution paths,
-    // so running `cargo test` on NixOS will query via nscd, which will resolve
-    // thingie.localhost to something.
-    // This is done by one of the systemd-provided NSS modules (nss-myhostname),
-    // which can only reply if nscd is in the loop on NixOS.
-    fn toremove_test_dns_resolution() {
-        let hostname = "thingie.localhost";
-        let mut sockets = dns_lookup::getaddrinfo(Some(hostname), None, None).unwrap();
-
-        let first_socket = sockets.next();
-        println!("{:?}", first_socket);
-        assert_eq!(first_socket.is_none(), false);
-    }
 }
