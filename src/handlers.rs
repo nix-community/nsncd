@@ -143,7 +143,7 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             Ok(vec![])
         }
         RequestType::GETHOSTBYNAME => {
-            debug!("GETHOSTBYNAME!!!!!!!!!!!!!!!");
+            debug!(log, "GETHOSTBYNAME!!!!!!!!!!!!!!!");
             let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
             debug!(log, "got hostname"; "hostname" => ?hostname);
 
@@ -153,70 +153,73 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                 address: AF_INET,
                 ..AddrInfoHints::default()
             };
-            let resp: HstResponse<Ipv4Addr> =
-                match dns_lookup::getaddrinfo(Some(hostname), None, Some(hints)) {
-                    Ok(resIter) => {
-                        let mut canon_names: Vec<String> = vec![];
-                        let mut addrs: Vec<Ipv4Addr> = vec![];
-                        for res in resIter {
-                            // TODO: is it fine to get no canonname?
-                            // TODO: handle aliases
-                            let res = res?;
-                            match res.canonname {
-                                Some(canon_name) => {
-                                    canon_names.push(canon_name);
-                                }
-                                None => {}
+            let resp: HstResponse<Ipv4Addr> = match dns_lookup::getaddrinfo(
+                Some(hostname),
+                None,
+                Some(hints),
+            ) {
+                Ok(resIter) => {
+                    let mut canon_names: Vec<String> = vec![];
+                    let mut addrs: Vec<Ipv4Addr> = vec![];
+                    for res in resIter {
+                        // TODO: is it fine to get no canonname?
+                        // TODO: handle aliases
+                        let res = res?;
+                        match res.canonname {
+                            Some(canon_name) => {
+                                canon_names.push(canon_name);
                             }
-                            // TODO: what happens if we don't add to canon_names, but to addrs?
-                            match res.sockaddr {
-                                std::net::SocketAddr::V4(addr) => {
-                                    debug!(log, "found an IPv4 addr, adding it to response";);
-                                    addrs.push(addr.ip().clone());
-                                }
-                                std::net::SocketAddr::V6(addr) => {
-                                    debug!(log, "got v6 while asking for v4 only";);
-                                }
+                            None => {}
+                        }
+                        // TODO: what happens if we don't add to canon_names, but to addrs?
+                        match res.sockaddr {
+                            std::net::SocketAddr::V4(addr) => {
+                                debug!(log, "found an IPv4 addr, adding it to response";);
+                                addrs.push(addr.ip().clone());
                             }
-                        }
-                        canon_names.dedup();
-                        if canon_names.len() > 1 {
-                            debug!(log, "Common name: that's fine, we only have one.");
-                            //TODO: handle that case, error out
-                        } else {
-                            debug!(log, "Oh ho, we seem to have some different common names: "; "common names" => ?canon_names);
-                        }
-
-                        let canon_name = canon_names.first().unwrap();
-
-                        // caculate h_name_len
-                        let h_name_len: c_int = match canon_names.first() {
-                            Some(canon_name) => canon_name.clone().into_bytes().len() as i32,
-                            None => 0,
-                        };
-
-                        debug!(log, "response is ready to go");
-                        HstResponse {
-                            header: HstResponseHeader {
-                                version: protocol::VERSION,
-                                found: 1,
-                                h_name_len,
-                                h_aliases_cnt: 0,
-                                h_addrtype: AF_INET, // TODO: check
-                                h_length: 4,         // T42ODO: size of the IP addr object
-                                h_addr_list_cnt: addrs.len() as i32,
-                                error: 0,
-                            },
-                            payload: Some(HstResponsePayload {
-                                name: canon_name.clone(),
-                                aliases: vec![],
-                                addrs,
-                            }),
+                            std::net::SocketAddr::V6(addr) => {
+                                debug!(log, "got v6 while asking for v4 only";);
+                            }
                         }
                     }
-                    Err(e) => {
-                        debug!(log, "Error while querying the hostname: "; "error" => e.error_num());
-                        HstResponse {
+                    canon_names.dedup();
+                    if canon_names.len() > 1 {
+                        debug!(log, "Common name: that's fine, we only have one.");
+                        //TODO: handle that case, error out
+                    } else {
+                        debug!(log, "Oh ho, we seem to have some different common names: "; "common names" => ?canon_names);
+                    }
+
+                    let canon_name = canon_names.first().unwrap();
+
+                    // caculate h_name_len
+                    let h_name_len: c_int = match canon_names.first() {
+                        Some(canon_name) => canon_name.clone().into_bytes().len() as i32,
+                        None => 0,
+                    };
+
+                    debug!(log, "response is ready to go");
+                    HstResponse {
+                        header: HstResponseHeader {
+                            version: protocol::VERSION,
+                            found: 1,
+                            h_name_len,
+                            h_aliases_cnt: 0,
+                            h_addrtype: AF_INET, // TODO: check
+                            h_length: 4,         // T42ODO: size of the IP addr object
+                            h_addr_list_cnt: addrs.len() as i32,
+                            error: 0,
+                        },
+                        payload: Some(HstResponsePayload {
+                            name: canon_name.clone(),
+                            aliases: vec![],
+                            addrs,
+                        }),
+                    }
+                }
+                Err(e) => {
+                    debug!(log, "Error while querying the hostname: "; "error" => e.error_num());
+                    HstResponse {
                         header: protocol::HstResponseHeader {
                             version: protocol::VERSION,
                             found: -1,
@@ -228,11 +231,11 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                             error: e.error_num(),
                         },
                         payload: None,
-                    }},
-                };
+                    }
+                }
+            };
             debug!(log, "Sending response");
             serialize_hst_response_v4(resp)
-
         }
         RequestType::GETHOSTBYNAMEv6 => {
             let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
