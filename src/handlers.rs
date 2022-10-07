@@ -143,6 +143,7 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             Ok(vec![])
         }
         RequestType::GETHOSTBYNAME => {
+            debug!("GETHOSTBYNAME!!!!!!!!!!!!!!!");
             let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
             debug!(log, "got hostname"; "hostname" => ?hostname);
 
@@ -170,6 +171,7 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                             // TODO: what happens if we don't add to canon_names, but to addrs?
                             match res.sockaddr {
                                 std::net::SocketAddr::V4(addr) => {
+                                    debug!(log, "found an IPv4 addr, adding it to response";);
                                     addrs.push(addr.ip().clone());
                                 }
                                 std::net::SocketAddr::V6(addr) => {
@@ -179,8 +181,12 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                         }
                         canon_names.dedup();
                         if canon_names.len() > 1 {
+                            debug!(log, "Common name: that's fine, we only have one.");
                             //TODO: handle that case, error out
+                        } else {
+                            debug!(log, "Oh ho, we seem to have some different common names: "; "common names" => ?canon_names);
                         }
+
                         let canon_name = canon_names.first().unwrap();
 
                         // caculate h_name_len
@@ -189,6 +195,7 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                             None => 0,
                         };
 
+                        debug!(log, "response is ready to go");
                         HstResponse {
                             header: HstResponseHeader {
                                 version: protocol::VERSION,
@@ -207,7 +214,9 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                             }),
                         }
                     }
-                    Err(e) => HstResponse {
+                    Err(e) => {
+                        debug!(log, "Error while querying the hostname: "; "error" => e.error_num());
+                        HstResponse {
                         header: protocol::HstResponseHeader {
                             version: protocol::VERSION,
                             found: -1,
@@ -219,9 +228,11 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                             error: e.error_num(),
                         },
                         payload: None,
-                    },
+                    }},
                 };
+            debug!(log, "Sending response");
             serialize_hst_response_v4(resp)
+
         }
         RequestType::GETHOSTBYNAMEv6 => {
             let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
