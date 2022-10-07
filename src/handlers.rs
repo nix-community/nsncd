@@ -22,15 +22,16 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use atoi::atoi;
-use dns_lookup::{getaddrinfo, lookup_addr, lookup_host, AddrInfoHints};
-use std::io::Error;
+use dns_lookup::{getaddrinfo, lookup_addr, AddrInfoHints};
 use nix::unistd::{getgrouplist, Gid, Group, Uid, User};
 use slog::{debug, error, Logger};
+
+use crate::protocol::{HstResponse, HstResponseHeader, HstResponsePayload};
 
 use super::protocol;
 use super::protocol::RequestType;
 
-use nix::libc::{AF_INET6, AF_INET};
+use nix::libc::{c_int, AF_INET};
 
 /// Handle a request by performing the appropriate lookup and sending the
 /// serialized response back to the client.
@@ -151,48 +152,76 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                 address: AF_INET,
                 ..AddrInfoHints::default()
             };
-            let resp: HstResponse =
-                match (dns_lookup::getaddrinfo(Some(hostname), None, Some(hints))) {
+            let resp: HstResponse<Ipv4Addr> =
+                match dns_lookup::getaddrinfo(Some(hostname), None, Some(hints)) {
                     Ok(resIter) => {
-                        let mut canon_names = vec!([]);
+                        let mut canon_names: Vec<String> = vec![];
+                        let mut addrs: Vec<Ipv4Addr> = vec![];
                         for res in resIter {
-                            let canon_name_o = (res?).canonname;
-                            match canon_name_o {
+                            // TODO: is it fine to get no canonname?
+                            // TODO: handle aliases
+                            let res = res?;
+                            match res.canonname {
                                 Some(canon_name) => {
-                                    vec.append(canon_name);
-                                },
+                                    canon_names.push(canon_name);
+                                }
                                 None => {}
-                               }
+                            }
+                            // TODO: what happens if we don't add to canon_names, but to addrs?
+                            match res.sockaddr {
+                                std::net::SocketAddr::V4(addr) => {
+                                    addrs.push(addr.ip().clone());
+                                }
+                                std::net::SocketAddr::V6(addr) => {
+                                    debug!(log, "got v6 while asking for v4 only";);
+                                }
+                            }
                         }
-                        let canon_name = "";
+                        canon_names.dedup();
+                        if canon_names.len() > 1 {
+                            //TODO: handle that case, error out
+                        }
+                        let canon_name = canon_names.first().unwrap();
+
+                        // caculate h_name_len
+                        let h_name_len: c_int = match canon_names.first() {
+                            Some(canon_name) => canon_name.clone().into_bytes().len() as i32,
+                            None => 0,
+                        };
+
                         HstResponse {
                             header: HstResponseHeader {
                                 version: protocol::VERSION,
                                 found: 1,
-                                h_name_len: canon_name.c,
+                                h_name_len,
                                 h_aliases_cnt: 0,
-                                h_addrtype: -1,
-                                h_length: -1,
-                                h_addr_list_cnt: 0,
-                                error: e.error_num()
-                            }
+                                h_addrtype: AF_INET, // TODO: check
+                                h_length: 4,         // T42ODO: size of the IP addr object
+                                h_addr_list_cnt: addrs.len() as i32,
+                                error: 0,
+                            },
+                            payload: Some(HstResponsePayload {
+                                name: canon_name.clone(),
+                                aliases: vec![],
+                                addrs,
+                            }),
                         }
+                    }
+                    Err(e) => HstResponse {
+                        header: protocol::HstResponseHeader {
+                            version: protocol::VERSION,
+                            found: -1,
+                            h_name_len: 0,
+                            h_aliases_cnt: 0,
+                            h_addrtype: -1,
+                            h_length: -1,
+                            h_addr_list_cnt: 0,
+                            error: e.error_num(),
+                        },
+                        payload: None,
                     },
-                    Err(e) =>
-                        HstResponse {
-                            header: protocol::HstResponseHeader {
-                                version: protocol::VERSION,
-                                found: -1,
-                                h_name_len: 0,
-                                h_aliases_cnt: 0,
-                                h_addrtype: -1,
-                                h_length: -1,
-                                h_addr_list_cnt: 0,
-                                error: e.error_num()
-                            }
-                            payload: None,
-                        }
                 };
+            serialize_hst_response_v4(resp)
         }
         RequestType::GETHOSTBYNAMEv6 => {
             let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
@@ -211,8 +240,6 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                     flags: 0,
                 }), //
             );
-
-            let _addr = resp_addrs.next()?; // Hmm, Vec<u8>, rly? I don't think we want to use getaddrinfo like that.
 
             // TODO: serialize and return the result
             Ok(vec![])
@@ -335,32 +362,56 @@ fn serialize_initgroups(groups: Vec<Gid>) -> Result<Vec<u8>> {
     Ok(result)
 }
 
-/// Send a set of IP addresses (gethostbyname response) back to the
-/// client.
-fn serialize_ipaddrs(ips: Vec<IpAddr>) -> Result<Vec<u8>> {
+/// Send a HSTResponse to the client.
+fn serialize_hst_response_v4(hst_response: HstResponse<Ipv4Addr>) -> Result<Vec<u8>> {
     let mut result = vec![];
-    let header = protocol::HstResponseHeader {
-        version: protocol::VERSION,
-        found: 1,
-        h_name_len: 0,// hname?,
-        h_aliases_cnt: 0,
-        h_addrtype: 0,
-        h_length: 0,// ips.len().try_into()? - nope,
-        h_addr_list_cnt: 0,
-        error: 0,
-    };
-    result.extend_from_slice(header.as_slice());
-    // TODO: serialize payload
-    // 1. hname string
-    // 2. uint32 table containing the lengths of each alias
-    // 3. Iterating on the result addr, serializing them. Each part is
-    //    h_length wide. Question: what's hlength size?
-    // 4. Iterating on the aliases, serializing them one by one
-    //    according to their size we previously sent
-    // 5. Size sanity check
+    result.extend_from_slice(hst_response.header.as_slice());
+
+    match hst_response.payload {
+        Some(payload) => {
+            /*
+              // Payload
+              // 1. hname string
+              cp = mempcpy (cp, hst->h_name, h_name_len);
+              // 2. table containing the lenghts of each alias
+              cp = mempcpy (cp, h_aliases_len, h_aliases_cnt * sizeof (uint32_t));
+
+              /* The normal addresses first.  */
+              addresses = cp;
+              // 3. Iterating on the result addr, serializing them. Each part is h_length wide.
+              // TODO: find h_length size.
+              for (cnt = 0; cnt < h_addr_list_cnt; ++cnt)
+            cp = mempcpy (cp, hst->h_addr_list[cnt], hst->h_length);
+
+              // 4. Iterating on the aliases, serializing them one by one according to their size previously sent.
+              /* Then the aliases.  */
+              aliases = cp;
+              for (cnt = 0; cnt < h_aliases_cnt; ++cnt)
+            cp = mempcpy (cp, hst->h_aliases[cnt], h_aliases_len[cnt]);
+
+              // 5. Size sanity check
+              assert (cp
+                  == dataset->strdata + total - offsetof (struct dataset,
+                                      strdata));
+
+                     * */
+
+            result.extend_from_slice(CString::new(payload.name)?.to_bytes_with_nul());
+            // TODO: aliases, currently left out
+
+            for address in payload.addrs {
+                // write bytes octet by octet into result.
+                let address = address;
+                for octet in address.octets() {
+                    result.push(octet)
+                }
+            }
+        }
+        None => {}
+    }
+
     Ok(result)
 }
-
 // Send a host q
 // glibc does memcpy the following:
 // hst->h_name, h_name_len

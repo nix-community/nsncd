@@ -22,10 +22,11 @@
 //! `handlers::send_{user,group}`. For a full picture of the protocol, you will
 //! need to read both.
 
-use std::convert::TryInto;
 use std::mem::size_of;
+use std::{convert::TryInto, net::SocketAddr};
 
 use anyhow::{ensure, Context, Result};
+use dns_lookup::AddrInfo;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 
@@ -209,9 +210,9 @@ impl InitgroupsResponseHeader {
 //
 //  hst_response_header
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct HstResponseHeader {
-    pub version: c_int, //
+    pub version: c_int,       //
     pub found: c_int,         // Set to 0 or 1, "boolean"
     pub h_name_len: c_int,    // length of h_name (?), which comes first in the payload
     pub h_aliases_cnt: c_int, // number of aliases in payload (?)
@@ -221,14 +222,18 @@ pub struct HstResponseHeader {
     pub error: c_int,
 }
 
-pub HstResponsePayload {
+#[derive(Debug)]
+pub struct HstResponsePayload<ipv> {
     pub name: String,
     pub aliases: Vec<String>,
-    pub addrs: Vec<AddrInfo>,
+    pub addrs: Vec<ipv>,
 }
-pub struct HstResponse {
+
+/// Analogous to the hstent NSCD struct.
+#[derive(Debug)]
+pub struct HstResponse<ipv> {
     pub header: HstResponseHeader,
-    pub payload: Option<HstResponsePayload>
+    pub payload: Option<HstResponsePayload<ipv>>,
 }
 
 impl HstResponseHeader {
