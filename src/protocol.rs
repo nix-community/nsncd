@@ -211,7 +211,7 @@ impl InitgroupsResponseHeader {
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct HstResponseHeader {
-    pub version: c_int,
+    pub version: c_int, //
     pub found: c_int,         // Set to 0 or 1, "boolean"
     pub h_name_len: c_int,    // length of h_name (?), which comes first in the payload
     pub h_aliases_cnt: c_int, // number of aliases in payload (?)
@@ -219,6 +219,16 @@ pub struct HstResponseHeader {
     pub h_length: c_int,
     pub h_addr_list_cnt: c_int,
     pub error: c_int,
+}
+
+pub HstResponsePayload {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub addrs: Vec<AddrInfo>,
+}
+pub struct HstResponse {
+    pub header: HstResponseHeader,
+    pub payload: Option<HstResponsePayload>
 }
 
 impl HstResponseHeader {

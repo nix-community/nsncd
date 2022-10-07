@@ -1,3 +1,4 @@
 /target
 /.vscode
 Vagrantfile
+shell.nix

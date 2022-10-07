@@ -23,11 +23,14 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use atoi::atoi;
 use dns_lookup::{getaddrinfo, lookup_addr, lookup_host, AddrInfoHints};
+use std::io::Error;
 use nix::unistd::{getgrouplist, Gid, Group, Uid, User};
 use slog::{debug, error, Logger};
 
 use super::protocol;
 use super::protocol::RequestType;
+
+use nix::libc::{AF_INET6, AF_INET};
 
 /// Handle a request by performing the appropriate lookup and sending the
 /// serialized response back to the client.
@@ -143,10 +146,53 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             debug!(log, "got hostname"; "hostname" => ?hostname);
 
             // do the request
-            let resp_addrs = lookup_host(hostname)?;
-
-            // TODO: serialize and return the result
-            Ok(vec![])
+            //let resp_addrs = lookup_host(hostname)?;
+            let hints = AddrInfoHints {
+                address: AF_INET,
+                ..AddrInfoHints::default()
+            };
+            let resp: HstResponse =
+                match (dns_lookup::getaddrinfo(Some(hostname), None, Some(hints))) {
+                    Ok(resIter) => {
+                        let mut canon_names = vec!([]);
+                        for res in resIter {
+                            let canon_name_o = (res?).canonname;
+                            match canon_name_o {
+                                Some(canon_name) => {
+                                    vec.append(canon_name);
+                                },
+                                None => {}
+                               }
+                        }
+                        let canon_name = "";
+                        HstResponse {
+                            header: HstResponseHeader {
+                                version: protocol::VERSION,
+                                found: 1,
+                                h_name_len: canon_name.c,
+                                h_aliases_cnt: 0,
+                                h_addrtype: -1,
+                                h_length: -1,
+                                h_addr_list_cnt: 0,
+                                error: e.error_num()
+                            }
+                        }
+                    },
+                    Err(e) =>
+                        HstResponse {
+                            header: protocol::HstResponseHeader {
+                                version: protocol::VERSION,
+                                found: -1,
+                                h_name_len: 0,
+                                h_aliases_cnt: 0,
+                                h_addrtype: -1,
+                                h_length: -1,
+                                h_addr_list_cnt: 0,
+                                error: e.error_num()
+                            }
+                            payload: None,
+                        }
+                };
         }
         RequestType::GETHOSTBYNAMEv6 => {
             let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
