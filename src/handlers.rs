@@ -26,7 +26,7 @@ use dns_lookup::{getaddrinfo, lookup_addr, AddrInfoHints};
 use nix::unistd::{getgrouplist, Gid, Group, Uid, User};
 use slog::{debug, error, Logger};
 
-use crate::protocol::{HstResponse, HstResponseHeader, HstResponsePayload};
+use crate::protocol::{HstResponse, HstResponseHeader, HstResponsePayload, AiResponseHeader};
 
 use super::protocol;
 use super::protocol::RequestType;
@@ -258,6 +258,20 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             // TODO: serialize and return the result
             Ok(vec![])
         }
+        | RequestType::GETAI => {
+            debug!(log, "handling GETAI"; "request" => ?request);
+            let request_str = CStr::from_bytes_with_nul(request.key)?.to_str()?;
+            let h_ai = AiResponseHeader {
+                version_or_size: protocol::VERSION,
+                found: 1,
+                naddrs: 1,
+                addrslen: 4,
+                canonlen: request_str.to_string().into_bytes().len() as i32,
+                error: 0
+            };
+            debug!(log, "GETAI: About to send a l33t"; "h_ai" => ?h_ai);
+            Ok(h_ai.as_slice().to_vec())
+        }
         // not implemented.
         RequestType::SHUTDOWN
         | RequestType::GETSTAT
@@ -265,7 +279,6 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
         | RequestType::GETFDPW
         | RequestType::GETFDGR
         | RequestType::GETFDHST
-        | RequestType::GETAI
         | RequestType::GETSERVBYNAME
         | RequestType::GETSERVBYPORT
         | RequestType::GETFDSERV

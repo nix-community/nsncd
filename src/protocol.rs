@@ -244,6 +244,24 @@ impl HstResponseHeader {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct AiResponseHeader {
+    pub version_or_size: c_int,
+    pub found: c_int,
+    pub naddrs: c_int,
+    pub addrslen: c_int,
+    pub canonlen: c_int,
+    pub error: c_int
+}
+
+impl AiResponseHeader {
+    // Serialize the header to bytes
+    pub fn as_slice(&self) -> &[u8] {
+        let p = self as *const _ as *const u8;
+        unsafe { std::slice::from_raw_parts(p, size_of::<Self>()) }
+    }
+}
 #[cfg(test)]
 mod test {
     use super::*;
