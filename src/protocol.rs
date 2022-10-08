@@ -247,7 +247,7 @@ impl HstResponseHeader {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct AiResponseHeader {
-    pub version_or_size: c_int,
+    pub version: c_int,
     pub found: c_int,
     pub naddrs: c_int,
     pub addrslen: c_int,

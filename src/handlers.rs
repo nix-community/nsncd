@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Two Sigma Open Source, LLC
+ * copyright 2020 two Sigma Open Source, LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -261,16 +261,34 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
         | RequestType::GETAI => {
             debug!(log, "handling GETAI"; "request" => ?request);
             let request_str = CStr::from_bytes_with_nul(request.key)?.to_str()?;
+            let canon_name_bytes = CString::new("thedomainisa.lie")?.into_bytes_with_nul();
             let h_ai = AiResponseHeader {
-                version_or_size: protocol::VERSION,
+                version: protocol::VERSION,
                 found: 1,
                 naddrs: 1,
                 addrslen: 4,
-                canonlen: request_str.to_string().into_bytes().len() as i32,
+                canonlen: canon_name_bytes.len() as i32,
                 error: 0
             };
-            debug!(log, "GETAI: About to send a l33t"; "h_ai" => ?h_ai);
-            Ok(h_ai.as_slice().to_vec())
+            debug!(log, "GETAI: About to send a response"; "h_ai" => ?h_ai);
+            let mut res = vec!();
+            res.extend_from_slice(h_ai.as_slice());
+            // Addrs, serialized in serie
+            // send 1 v4 addr. 0.0.0.0 to make sure we don't hit an endianness issue.
+            let addr = nix::sys::socket::Ipv4Addr::new(127, 0, 0, 1).octets();
+            res.push(addr[0]);
+            res.push(addr[1]);
+            res.push(addr[2]);
+            res.push(addr[3]);
+            // family array, 1 byte for 1 addr length.
+            // 4 bytes wide for a v4
+            // 16 bytes wide for a v6
+            res.push(4 as u8);
+            // canonname
+            res.extend_from_slice(&canon_name_bytes);
+            // key
+            res.extend_from_slice(&request.key);
+            Ok(res)
         }
         // not implemented.
         RequestType::SHUTDOWN
@@ -288,6 +306,7 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
         | RequestType::LASTREQ => Ok(vec![]),
     }
 }
+
 
 /// Send a user (passwd entry) back to the client, or a response indicating the
 /// lookup found no such user.
