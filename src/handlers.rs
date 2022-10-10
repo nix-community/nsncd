@@ -32,6 +32,7 @@ use super::protocol;
 use super::protocol::RequestType;
 
 use nix::libc::{c_int, AF_INET};
+use byteorder::{BigEndian, ReadBytesExt};
 
 /// Handle a request by performing the appropriate lookup and sending the
 /// serialized response back to the client.
@@ -275,19 +276,21 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             res.extend_from_slice(h_ai.as_slice());
             // Addrs, serialized in serie
             // send 1 v4 addr. 0.0.0.0 to make sure we don't hit an endianness issue.
-            let addr = nix::sys::socket::Ipv4Addr::new(127, 0, 0, 1).octets();
-            res.push(addr[0]);
-            res.push(addr[1]);
-            res.push(addr[2]);
-            res.push(addr[3]);
+            let addr = nix::sys::socket::Ipv4Addr::new(127, 0, 0, 1);
+            let octets = addr.octets();
+            let s_addr = u32::to_be(((octets[0] as u32) << 24) |
+                                   ((octets[1] as u32) << 16) |
+                                   ((octets[2] as u32) << 8) |
+                                   (octets[3] as u32));
+            for byte in s_addr.to_be_bytes() {
+                res.push(byte);
+            }
             // family array, 1 byte for 1 addr length.
             // 4 bytes wide for a v4
             // 16 bytes wide for a v6
             res.push(4 as u8);
             // canonname
             res.extend_from_slice(&canon_name_bytes);
-            // key
-            res.extend_from_slice(&request.key);
             Ok(res)
         }
         // not implemented.

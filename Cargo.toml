@@ -25,6 +25,7 @@ num-derive = "^0.3"
 num-traits = "^0.2"
 dns-lookup = "1.0.8"
 sd-notify = "0.4.1"
+byteorder = "^1.4.3"
 
 [dev-dependencies]
 criterion = "^0.3"
