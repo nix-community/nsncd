@@ -30,6 +30,7 @@ use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 
 use nix::libc::{c_int, gid_t, uid_t};
+use nix::sys::socket::IpAddr;
 
 /// This is version 2 of the glibc nscd protocol. The version is passed as part
 /// of each message header.
@@ -182,6 +183,36 @@ impl InitgroupsResponseHeader {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AiResponse {
+    pub addrs: Vec<IpAddr>,
+    pub canon_name: String
+}
+
+/// Response Header derived from the glibc `ai_response_header`
+/// struct.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct AiResponseHeader {
+    pub version: c_int,
+    pub found: c_int,
+    pub naddrs: c_int,
+    pub addrslen: c_int,
+    pub canonlen: c_int,
+    pub error: c_int
+}
+
+impl AiResponseHeader {
+    /// Serialize the header to bytes
+    ///
+    /// The C implementations of nscd just take the address of the struct, so
+    /// we will too, to make it easy to convince ourselves it's correct.
+    pub fn as_slice(&self) -> &[u8] {
+        let p = self as *const _ as *const u8;
+        unsafe { std::slice::from_raw_parts(p, size_of::<Self>()) }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -253,6 +284,29 @@ mod test {
             expected.extend_from_slice(&VERSION.to_ne_bytes());
             expected.extend_from_slice(&1i32.to_ne_bytes());
             expected.extend_from_slice(&10i32.to_ne_bytes());
+        }
+
+        assert_eq!(header.as_slice(), expected);
+    }
+
+    #[test]
+    fn ai_response_header_as_slice() {
+        let header = AiResponseHeader {
+            version: VERSION,
+            found: 1,
+            naddrs: 1,
+            addrslen: 4,
+            canonlen: 10,
+            error:0
+        };
+        let mut expected = Vec::with_capacity(4 * 6);
+        {
+            expected.extend_from_slice(&VERSION.to_ne_bytes());
+            expected.extend_from_slice(&1i32.to_ne_bytes());
+            expected.extend_from_slice(&1i32.to_ne_bytes());
+            expected.extend_from_slice(&4i32.to_ne_bytes());
+            expected.extend_from_slice(&10i32.to_ne_bytes());
+            expected.extend_from_slice(&0i32.to_ne_bytes());
         }
 
         assert_eq!(header.as_slice(), expected);
