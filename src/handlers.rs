@@ -18,7 +18,6 @@ use std::convert::TryInto;
 use std::ffi::{CStr, CString};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::unix::ffi::OsStrExt;
-use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use atoi::atoi;
@@ -32,7 +31,7 @@ use super::protocol;
 use super::protocol::RequestType;
 
 use nix::libc::{c_int, AF_INET};
-use byteorder::{BigEndian, ReadBytesExt};
+use std::str::FromStr;
 
 /// Handle a request by performing the appropriate lookup and sending the
 /// serialized response back to the client.
@@ -262,12 +261,12 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
         | RequestType::GETAI => {
             debug!(log, "handling GETAI"; "request" => ?request);
             let request_str = CStr::from_bytes_with_nul(request.key)?.to_str()?;
-            let canon_name_bytes = CString::new("thedomainisa.lie")?.into_bytes_with_nul();
+            let canon_name_bytes = CString::new("thecakeisa.lie")?.into_bytes_with_nul();
             let h_ai = AiResponseHeader {
                 version: protocol::VERSION,
                 found: 1,
-                naddrs: 1,
-                addrslen: 4,
+                naddrs: 2,
+                addrslen: 20,
                 canonlen: canon_name_bytes.len() as i32,
                 error: 0
             };
@@ -278,17 +277,19 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             // send 1 v4 addr. 0.0.0.0 to make sure we don't hit an endianness issue.
             let addr = nix::sys::socket::Ipv4Addr::new(127, 0, 0, 1);
             let octets = addr.octets();
-            let s_addr = u32::to_be(((octets[0] as u32) << 24) |
-                                   ((octets[1] as u32) << 16) |
-                                   ((octets[2] as u32) << 8) |
-                                   (octets[3] as u32));
-            for byte in s_addr.to_be_bytes() {
+            for byte in octets {
                 res.push(byte);
             }
-            // family array, 1 byte for 1 addr length.
-            // 4 bytes wide for a v4
-            // 16 bytes wide for a v6
-            res.push(4 as u8);
+            let addr = nix::sys::socket::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1);
+            let segments = addr.segments();
+            for segment in segments {
+                for byte in u16::to_be_bytes(segment) {
+                    res.push(byte);
+                }
+            }
+            // family array, 1 byte for 1 addr type.
+            res.push(nix::sys::socket::AddressFamily::Inet as u8);
+            res.push(nix::sys::socket::AddressFamily::Inet6 as u8);
             // canonname
             res.extend_from_slice(&canon_name_bytes);
             Ok(res)
