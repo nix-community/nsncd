@@ -413,6 +413,8 @@ fn serialize_host(host: Result<Option<Host>>) -> Vec<u8> {
 
 #[cfg(test)]
 mod test {
+    use std::net::Ipv4Addr;
+
     use super::*;
 
     fn test_logger() -> slog::Logger {
@@ -457,5 +459,47 @@ mod test {
         let output =
             handle_request(&test_logger(), &request).expect("should handle request with no error");
         assert_eq!(expected, output);
+    }
+
+    #[test]
+    fn test_handle_gethostbyaddr() {
+        let request = protocol::Request {
+            ty: protocol::RequestType::GETHOSTBYADDR,
+            key: &[4, 0, 0, 0, 127, 0, 0, 1],
+        };
+
+        let expected = serialize_host(Ok(Some(Host {
+            addresses: vec![IpAddr::from(Ipv4Addr::new(127, 0, 0, 1))],
+            hostname: "localhost".to_string(),
+        })));
+
+        let output =
+            handle_request(&test_logger(), &request).expect("should handle request with no error");
+
+        assert_eq!(expected, output)
+    }
+
+    #[test]
+    fn test_handle_gethostbyaddr_invalid_af() {
+        let request = protocol::Request {
+            ty: protocol::RequestType::GETHOSTBYADDR,
+            key: &[6, 0, 0, 0, 127, 0, 0, 1],
+        };
+
+        let result = handle_request(&test_logger(), &request);
+
+        assert!(result.is_err(), "should error on wrong AF");
+    }
+
+    #[test]
+    fn test_handle_gethostbyaddr_invalid_len() {
+        let request = protocol::Request {
+            ty: protocol::RequestType::GETHOSTBYADDR,
+            key: &[4, 0, 0, 0, 127, 0, 0],
+        };
+
+        let result = handle_request(&test_logger(), &request);
+
+        assert!(result.is_err(), "should error on invalid length");
     }
 }
