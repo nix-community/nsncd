@@ -16,11 +16,13 @@
 
 use std::convert::TryInto;
 use std::ffi::{CStr, CString};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::os::unix::ffi::OsStrExt;
 
 use anyhow::{bail, Context, Result};
 use atoi::atoi;
+use dns_lookup::getnameinfo;
+use nix::libc::NI_NUMERICSERV;
 use nix::unistd::{getgrouplist, Gid, Group, Uid, User};
 use slog::{debug, error, Logger};
 
@@ -113,6 +115,53 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             serialize_initgroups(groups)
         }
 
+        // GETHOSTBYADDR and GETHOSTBYADDRv6 implement reverse lookup
+        // The key contains the address to look for.
+        RequestType::GETHOSTBYADDR => {
+            let key = request.key;
+
+            if key.len() != 4 {
+                bail!("Invalid key len: {}, expected 4", key.len());
+            }
+            let address_bytes: [u8; 4] = key.try_into()?;
+            let address = IpAddr::from(address_bytes);
+
+            let sock = SocketAddr::new(address, 0);
+            let host = match getnameinfo(&sock, NI_NUMERICSERV) {
+                Ok((hostname, _service)) => Ok(Some(Host {
+                    addresses: vec![address],
+                    hostname,
+                })),
+                Err(e) => match e.kind() {
+                    dns_lookup::LookupErrorKind::NoName => Ok(None),
+                    _ => bail!("error during lookup: {:?}", e),
+                },
+            };
+            Ok(serialize_host(log, host))
+        }
+        RequestType::GETHOSTBYADDRv6 => {
+            let key = request.key;
+
+            if key.len() != 16 {
+                bail!("Invalid key len: {}, expected 16", key.len());
+            }
+            let address_bytes: [u8; 16] = key.try_into()?;
+            let address = IpAddr::from(address_bytes);
+
+            let sock = SocketAddr::new(address, 0);
+            let host = match getnameinfo(&sock, NI_NUMERICSERV) {
+                Ok((hostname, _service)) => Ok(Some(Host {
+                    addresses: vec![address],
+                    hostname,
+                })),
+                Err(e) => match e.kind() {
+                    dns_lookup::LookupErrorKind::NoName => Ok(None),
+                    _ => bail!("error during lookup: {:?}", e),
+                },
+            };
+            Ok(serialize_host(log, host))
+        }
+
         // There's no cache to invalidate
         RequestType::INVALIDATE => {
             debug!(log, "received invalidate request, ignoring");
@@ -139,9 +188,7 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
         }
 
         // Not implemented (yet)
-        RequestType::GETHOSTBYADDR
-        | RequestType::GETHOSTBYADDRv6
-        | RequestType::GETHOSTBYNAME
+        RequestType::GETHOSTBYNAME
         | RequestType::GETHOSTBYNAMEv6
         | RequestType::GETSTAT
         | RequestType::GETAI
@@ -378,6 +425,8 @@ fn serialize_host(log: &slog::Logger, host: Result<Option<Host>>) -> Vec<u8> {
 
 #[cfg(test)]
 mod test {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
     use super::*;
 
     fn test_logger() -> slog::Logger {
@@ -422,5 +471,71 @@ mod test {
         let output =
             handle_request(&test_logger(), &request).expect("should handle request with no error");
         assert_eq!(expected, output);
+    }
+
+    #[test]
+    fn test_handle_gethostbyaddr() {
+        let request = protocol::Request {
+            ty: protocol::RequestType::GETHOSTBYADDR,
+            key: &[127, 0, 0, 1],
+        };
+
+        let expected = serialize_host(
+            &test_logger(),
+            Ok(Some(Host {
+                addresses: vec![IpAddr::from(Ipv4Addr::new(127, 0, 0, 1))],
+                hostname: "localhost".to_string(),
+            })),
+        );
+
+        let output =
+            handle_request(&test_logger(), &request).expect("should handle request with no error");
+
+        assert_eq!(expected, output)
+    }
+
+    #[test]
+    fn test_handle_gethostbyaddr_invalid_len() {
+        let request = protocol::Request {
+            ty: protocol::RequestType::GETHOSTBYADDR,
+            key: &[127, 0, 0],
+        };
+
+        let result = handle_request(&test_logger(), &request);
+
+        assert!(result.is_err(), "should error on invalid length");
+    }
+
+    #[test]
+    fn test_handle_gethostbyaddrv6() {
+        let request = protocol::Request {
+            ty: protocol::RequestType::GETHOSTBYADDRv6,
+            key: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        };
+
+        let expected = serialize_host(
+            &test_logger(),
+            Ok(Some(Host {
+                addresses: vec![IpAddr::from(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))],
+                hostname: "localhost".to_string(),
+            })),
+        );
+
+        let output =
+            handle_request(&test_logger(), &request).expect("should handle request with no error");
+
+        assert_eq!(expected, output)
+    }
+
+    #[test]
+    fn test_handle_gethostbyaddrv6_invalid_len() {
+        let request = protocol::Request {
+            ty: protocol::RequestType::GETHOSTBYADDRv6,
+            key: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        };
+
+        let result = handle_request(&test_logger(), &request);
+
+        assert!(result.is_err(), "should error on invalid length");
     }
 }
