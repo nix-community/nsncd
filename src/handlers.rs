@@ -16,11 +16,13 @@
 
 use std::convert::TryInto;
 use std::ffi::{CStr, CString};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::os::unix::ffi::OsStrExt;
 
 use anyhow::{bail, Context, Result};
 use atoi::atoi;
+use dns_lookup::{getnameinfo, lookup_addr};
+use nix::libc::NI_NUMERICSERV;
 use nix::unistd::{getgrouplist, Gid, Group, Uid, User};
 use slog::{debug, error, Logger};
 
@@ -112,9 +114,61 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             };
             serialize_initgroups(groups)
         }
-        RequestType::GETHOSTBYADDR
-        | RequestType::GETHOSTBYADDRv6
-        | RequestType::GETHOSTBYNAME
+        // GETHOSTBYADDR and GETHOSTBYADDRv6 implement reverse lookup
+        // The first 32 bits in the request key is the length of the ip address (BE), then comes
+        // the address.
+        RequestType::GETHOSTBYADDR => {
+            let key = request.key;
+
+            if key.len() != 4 + 4 {
+                bail!("Invalid key len: {}, expected 8", key.len());
+            }
+            if key[0] != 4 || key[1] != 0 || key[2] != 0 || key[3] != 0 {
+                bail!("Invalid address type, expected 0x04 0x00 0x00 0x00");
+            }
+
+            let address_bytes: [u8; 4] = key[4..].try_into()?;
+            let address = IpAddr::from(address_bytes);
+
+            let sock = SocketAddr::new(address, 0);
+            let host = match getnameinfo(&sock, NI_NUMERICSERV) {
+                Ok((hostname, _service)) => Ok(Some(Host {
+                    addresses: vec![address],
+                    hostname,
+                })),
+                Err(e) => match e.kind() {
+                    dns_lookup::LookupErrorKind::NoName => Ok(None),
+                    _ => bail!("error during lookup: {:?}", e),
+                },
+            };
+            Ok(serialize_host(host))
+        }
+        RequestType::GETHOSTBYADDRv6 => {
+            let key = request.key;
+
+            if key.len() != 4 + 16 {
+                bail!("Invalid key len: {}, expected 20", key.len());
+            }
+            if key[0] != 6 || key[1] != 0 || key[2] != 0 || key[3] != 0 {
+                bail!("Invalid address type, expected 0x10 0x00 0x00 0x00");
+            }
+
+            let address_bytes: [u8; 16] = key[4..].try_into()?;
+            let address = IpAddr::from(address_bytes);
+
+            let result = lookup_addr(&address);
+            let host = match result {
+                Ok(hostname) => Ok(Some(Host {
+                    addresses: vec![address],
+                    hostname: hostname.to_string(),
+                })),
+                // TODO: distinguish no data from lookup error
+                Err(_) => Ok(None),
+            };
+            Ok(serialize_host(host))
+        }
+
+        RequestType::GETHOSTBYNAME
         | RequestType::GETHOSTBYNAMEv6
         | RequestType::SHUTDOWN
         | RequestType::GETSTAT
