@@ -21,8 +21,8 @@ use std::os::unix::ffi::OsStrExt;
 
 use anyhow::{bail, Context, Result};
 use atoi::atoi;
-use dns_lookup::getnameinfo;
-use nix::libc::NI_NUMERICSERV;
+use dns_lookup::{getaddrinfo, getnameinfo, AddrInfoHints};
+use nix::libc::{AF_INET6, NI_NUMERICSERV, SOCK_STREAM};
 use nix::unistd::{getgrouplist, Gid, Group, Uid, User};
 use slog::{debug, error, Logger};
 
@@ -162,6 +162,56 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             Ok(serialize_host(host))
         }
 
+        RequestType::GETHOSTBYNAME => {
+            let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
+            let hints = AddrInfoHints {
+                socktype: SOCK_STREAM,
+                ..AddrInfoHints::default()
+            };
+
+            let host = match getaddrinfo(Some(hostname), None, Some(hints)) {
+                Ok(addrs) => {
+                    let addresses: std::io::Result<Vec<_>> =
+                        addrs.map(|r| r.map(|a| a.sockaddr.ip())).collect();
+                    Ok(Some(Host {
+                        addresses: addresses?,
+                        hostname: hostname.to_string(),
+                    }))
+                }
+                Err(e) => match e.kind() {
+                    dns_lookup::LookupErrorKind::NoName => Ok(None),
+                    _ => bail!("error during lookup: {:?}", e),
+                },
+            };
+            Ok(serialize_host(host))
+        }
+
+        RequestType::GETHOSTBYNAMEv6 => {
+            let hostname = CStr::from_bytes_with_nul(request.key)?.to_str()?;
+
+            let hints = AddrInfoHints {
+                socktype: SOCK_STREAM,
+                address: AF_INET6, // ai_family
+                ..AddrInfoHints::default()
+            };
+
+            let host = match getaddrinfo(Some(hostname), None, Some(hints)) {
+                Ok(addrs) => {
+                    let addresses: std::io::Result<Vec<_>> =
+                        addrs.map(|r| r.map(|a| a.sockaddr.ip())).collect();
+                    Ok(Some(Host {
+                        addresses: addresses?,
+                        hostname: hostname.to_string(),
+                    }))
+                }
+                Err(e) => match e.kind() {
+                    dns_lookup::LookupErrorKind::NoName => Ok(None),
+                    _ => bail!("error during lookup: {:?}", e),
+                },
+            };
+            Ok(serialize_host(host))
+        }
+
         // There's no cache to invalidate
         RequestType::INVALIDATE => {
             debug!(log, "received invalidate request, ignoring");
@@ -173,10 +223,9 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             debug!(log, "received shutdown request, ignoring");
             Ok(vec![])
         }
-
-        // These will normally send an FD pointing to the internal cache structure,
-        // which clients use to look into the cache contents on their own.
-        // We don't cache, and we don't want clients to poke around in cache structures either.
+        // These are normally used to send an FD pointing to the internal cache structure,
+        // which is meant for clients to look into the cache contents on their own.
+        // As we don't cache, and don't want to have clients do this, don't actually send fds over.
         // Luckily clients fall back to explicit queries if no FDs are sent over.
         RequestType::GETFDPW
         | RequestType::GETFDGR
@@ -187,10 +236,7 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
             Ok(vec![])
         }
 
-        // Not implemented (yet)
-        RequestType::GETHOSTBYNAME
-        | RequestType::GETHOSTBYNAMEv6
-        | RequestType::GETSTAT
+        RequestType::GETSTAT
         | RequestType::GETAI
         | RequestType::GETSERVBYNAME
         | RequestType::GETSERVBYPORT
