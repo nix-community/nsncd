@@ -218,16 +218,27 @@ fn handle_stream(log: &slog::Logger, mut stream: UnixStream) {
             return;
         }
     };
-    if let Err(e) = stream.write_all(response.as_slice()) {
-        match e.kind() {
+    debug!(log, "about to send out response: {:02x?}", response);
+    match stream.write_all(response.as_slice()) {
+        Ok(_) => {
+            debug!(log, "ok sending response");
+        }
+        Err(e) => match e.kind() {
             // If we send a response that's too big for the client's buffer,
             // the client will disconnect and not read the rest of our
             // response, and then come back with a new connection after
             // increasing its buffer. There's no need to log that, and
             // generally, clients can disappear at any point.
-            ErrorKind::ConnectionReset | ErrorKind::BrokenPipe => (),
-            _ => debug!(log, "sending response"; "response_len" => response.len(), "err" => %e),
-        };
+            ErrorKind::ConnectionReset => {
+                debug!(log, "ConnectionReset");
+            }
+            ErrorKind::BrokenPipe => {
+                debug!(log, "BrokenPipe");
+            }
+            _ => {
+                debug!(log, "other error sending response"; "response_len" => response.len(), "err" => %e)
+            }
+        },
     }
     if let Err(e) = stream.shutdown(std::net::Shutdown::Both) {
         debug!(log, "shutting down stream"; "err" => %e);
