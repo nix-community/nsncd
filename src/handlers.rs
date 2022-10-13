@@ -551,7 +551,8 @@ fn serialize_host(host: Result<Option<Host>>) -> Vec<u8> {
 
     match result() {
         Ok(res) => res,
-        Err(_e) => {
+        Err(e) => {
+            println!("error passed into the function or encountered during parsing: {e}");
             // handle errors passed into the function, or encountered during parsing.
             // TODO: H_ERRNO_NETDB_INTERNAL is fine?
             let header = protocol::HstResponseHeader {
