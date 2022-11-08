@@ -200,17 +200,20 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                 ..AddrInfoHints::default()
             };
 
-            let host = match getaddrinfo(Some(hostname), None, Some(hints)) {
-                Ok(addrs) => {
-                    let addresses: std::io::Result<Vec<_>> = addrs
-                        .filter(|x| match x {
-                            Err(_) => false,
-                            Ok(addr) => addr.sockaddr.is_ipv4(),
-                        })
-                        .map(|r| r.map(|a| a.sockaddr.ip()))
-                        .collect();
+            let host = match getaddrinfo(Some(hostname), None, Some(hints))
+                .map(|addrs|
+		     addrs.filter_map(|r| r.ok())
+			  .filter(|r| r.sockaddr.is_ipv4())
+			  .map(|a| a.sockaddr.ip())
+			  .collect::<Vec<_>>())
+	    {
+		// no matches found
+		Ok(addresses) if addresses.len() == 0 => {
+		    Ok(None)
+		}
+                Ok(addresses) => {
                     Ok(Some(Host {
-                        addresses: addresses?,
+                        addresses,
                         hostname: hostname.to_string(),
                     }))
                 }
