@@ -234,20 +234,19 @@ pub fn handle_request(log: &Logger, request: &protocol::Request) -> Result<Vec<u
                 ..AddrInfoHints::default()
             };
 
-            let host = match getaddrinfo(Some(hostname), None, Some(hints)) {
-                Ok(addrs) => {
-                    let addresses: std::io::Result<Vec<_>> = addrs
-                        .filter(|x| match x {
-                            Err(_) => false,
-                            Ok(addr) => addr.sockaddr.is_ipv6(),
-                        })
-                        .map(|r| r.map(|a| a.sockaddr.ip()))
-                        .collect();
-                    Ok(Some(Host {
-                        addresses: addresses?,
-                        hostname: hostname.to_string(),
-                    }))
-                }
+            let host = match getaddrinfo(Some(hostname), None, Some(hints)).map(|addrs| {
+                addrs
+                    .filter_map(|r| r.ok())
+                    .filter(|r| r.sockaddr.is_ipv6())
+                    .map(|a| a.sockaddr.ip())
+                    .collect::<Vec<_>>()
+            }) {
+                // No matches found
+                Ok(addresses) if addresses.len() == 0 => Ok(None),
+                Ok(addresses) => Ok(Some(Host {
+                    addresses,
+                    hostname: hostname.to_string(),
+                })),
                 Err(e) => match e.kind() {
                     dns_lookup::LookupErrorKind::NoName => Ok(None),
                     _ => bail!("error during lookup: {:?}", e),
@@ -379,6 +378,94 @@ pub struct Host {
     pub hostname: String,
 }
 
+impl Host {
+    fn serialize(&self) -> Result<Vec<u8>> {
+        // Loop over all addresses.
+        // Serialize them into a slice, which is used later in the payload.
+        // Take note of the number of addresses (by AF).
+        let mut num_v4 = 0;
+        let mut num_v6 = 0;
+        let mut buf_addrs = vec![];
+
+        for address in self.addresses.iter() {
+            match address {
+                IpAddr::V4(ip4) => {
+                    num_v4 += 1;
+                    for octet in ip4.octets() {
+                        buf_addrs.push(octet)
+                    }
+                }
+                IpAddr::V6(ip6) => {
+                    num_v6 += 1;
+                    for octet in ip6.octets() {
+                        buf_addrs.push(octet)
+                    }
+                }
+            }
+        }
+
+        // this can only ever express one address family
+        if num_v4 != 0 && num_v6 != 0 {
+            bail!("unable to serialize mixed AF")
+        }
+
+        let num_addrs = num_v4 + num_v6;
+        let has_addrs = num_addrs > 0;
+
+        let hostname_c_string_bytes = CString::new(self.hostname.clone())?.into_bytes_with_nul();
+        let hostname_c_string_len = if has_addrs {
+            hostname_c_string_bytes.len() as i32
+        } else {
+            0
+        };
+
+        let header = protocol::HstResponseHeader {
+            version: protocol::VERSION,
+            found: if has_addrs { 1 } else { 0 },
+            h_name_len: hostname_c_string_len,
+            h_aliases_cnt: 0,
+            h_addrtype: if !has_addrs {
+                -1
+            } else if num_v4 != 0 {
+                nix::sys::socket::AddressFamily::Inet as i32
+            } else {
+                nix::sys::socket::AddressFamily::Inet6 as i32
+            },
+            h_length: if !has_addrs {
+                -1
+            } else if num_v4 != 0 {
+                4
+            } else {
+                16
+            },
+            h_addr_list_cnt: num_addrs as i32,
+            error: if has_addrs {
+                0
+            } else {
+                protocol::H_ERRNO_HOST_NOT_FOUND
+            },
+        };
+
+        let total_len = 4 * 8 + hostname_c_string_len as i32 + buf_addrs.len() as i32;
+        let mut buf = Vec::with_capacity(total_len as usize);
+
+        // add header
+        buf.extend_from_slice(header.as_slice());
+
+        // add hostname
+        if has_addrs {
+            buf.extend_from_slice(&hostname_c_string_bytes);
+
+            // add serialized addresses from buf_addrs
+            buf.extend_from_slice(buf_addrs.as_slice());
+        }
+
+        debug_assert_eq!(buf.len() as i32, total_len);
+
+        Ok(buf)
+    }
+}
+
 /// Serialize a [RequestType::GETAI] response to the wire.
 ///
 /// This wire format has been implemented by reading the `addhstaiX`
@@ -454,118 +541,20 @@ fn serialize_address_info(resp: &AiResponse) -> Result<Vec<u8>> {
 /// Send a gethostby{addr,name}{,v6} entry back to the client,
 /// or a response indicating the lookup failed.
 fn serialize_host(log: &slog::Logger, host: Result<Option<Host>>) -> Vec<u8> {
-    let result = || {
-        match host {
-            Ok(Some(host)) => {
-                // Loop over all addresses.
-                // Serialize them into a slice, which is used later in the payload.
-                // Take note of the number of addresses (by AF).
-                let mut num_v4 = 0;
-                let mut num_v6 = 0;
-                let mut buf_addrs = vec![];
-
-                for address in host.addresses {
-                    match address {
-                        IpAddr::V4(ip4) => {
-                            num_v4 += 1;
-                            for octet in ip4.octets() {
-                                buf_addrs.push(octet)
-                            }
-                        }
-                        IpAddr::V6(ip6) => {
-                            num_v6 += 1;
-                            for octet in ip6.octets() {
-                                buf_addrs.push(octet)
-                            }
-                        }
-                    }
-                }
-
-                // this can only ever express one address family
-                if num_v4 != 0 && num_v6 != 0 {
-                    bail!("unable to serialize mixed AF")
-                }
-
-                let num_addrs = num_v4 + num_v6;
-
-                let hostname_c_string_bytes =
-                    CString::new(host.hostname.clone())?.into_bytes_with_nul();
-                let hostname_c_string_len = hostname_c_string_bytes.len();
-
-                let header = protocol::HstResponseHeader {
-                    version: protocol::VERSION,
-                    found: 1 as i32,
-                    h_name_len: hostname_c_string_len as i32,
-                    h_aliases_cnt: 0 as i32,
-                    h_addrtype: if num_v4 != 0 {
-                        nix::sys::socket::AddressFamily::Inet as i32
-                    } else {
-                        nix::sys::socket::AddressFamily::Inet6 as i32
-                    },
-                    h_length: if num_v4 != 0 { 4 as i32 } else { 16 as i32 },
-                    h_addr_list_cnt: num_addrs as i32,
-                    error: 0,
-                };
-
-                let total_len = 4 * 8 + hostname_c_string_len as i32 + buf_addrs.len() as i32;
-                let mut buf = Vec::with_capacity(total_len as usize);
-
-                // add header
-                buf.extend_from_slice(header.as_slice());
-
-                // add hostname
-                buf.extend_from_slice(&hostname_c_string_bytes);
-
-                // add serialized addresses from buf_addrs
-                buf.extend_from_slice(buf_addrs.as_slice());
-
-                debug_assert_eq!(buf.len() as i32, total_len);
-
-                Ok(buf)
-            }
-            Ok(None) => {
-                let header = protocol::HstResponseHeader {
-                    version: protocol::VERSION,
-                    found: 0,
-                    h_name_len: 0,
-                    h_aliases_cnt: 0,
-                    h_addrtype: -1 as i32,
-                    h_length: -1 as i32,
-                    h_addr_list_cnt: 0,
-                    error: protocol::H_ERRNO_HOST_NOT_FOUND as i32,
-                };
-
-                let mut buf = Vec::with_capacity(4 * 8);
-                buf.extend_from_slice(header.as_slice());
-                Ok(buf)
-            }
-            Err(e) => {
-                // pass along error
-                Err(e)
-            }
-        }
-    };
-
-    match result() {
-        Ok(res) => res,
-        Err(e) => {
-            error!(log, "parsing request"; "err" => %e);
-            let header = protocol::HstResponseHeader {
-                version: protocol::VERSION,
-                found: 0,
-                h_name_len: 0,
-                h_aliases_cnt: 0,
-                h_addrtype: -1 as i32,
-                h_length: -1 as i32,
-                h_addr_list_cnt: protocol::H_ERRNO_NETDB_INTERNAL as i32,
-                error: 0,
-            };
-
-            let mut buf = Vec::with_capacity(4 * 8);
-            buf.extend_from_slice(header.as_slice());
-            buf
-        }
-    }
+    // if we didn't get an error take the inner value (Option<Host>) and then,
+    host.and_then(|maybe_host| {
+        // if it is Some(host) then serialize, else return the error.
+        maybe_host
+            .map(|h| h.serialize())
+            // if the "host" is None then return a default error response.
+            .unwrap_or_else(|| Ok(protocol::HstResponseHeader::ERRNO_HOST_NOT_FOUND.to_vec()))
+    })
+    // if after all of the above we still have to deal with an error,
+    // return the error response.
+    .unwrap_or_else(|e| {
+        error!(log, "parsing request"; "err" => %e);
+        protocol::HstResponseHeader::ERRNO_NETDB_INTERNAL.to_vec()
+    })
 }
 
 #[cfg(test)]
