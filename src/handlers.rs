@@ -415,15 +415,11 @@ impl Host {
             match address {
                 IpAddr::V4(ip4) => {
                     num_v4 += 1;
-                    for octet in ip4.octets() {
-                        buf_addrs.push(octet)
-                    }
+                    buf_addrs.extend_from_slice(ip4.octets().as_slice());
                 }
                 IpAddr::V6(ip6) => {
                     num_v6 += 1;
-                    for octet in ip6.octets() {
-                        buf_addrs.push(octet)
-                    }
+                    buf_addrs.extend_from_slice(ip6.octets().as_slice());
                 }
             }
         }
