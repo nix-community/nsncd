@@ -2,6 +2,17 @@
 
 `nsncd` is a nscd-compatible daemon that proxies lookups, without caching.
 
+## Notes About the Nix-Community Fork
+
+We use this fork in NixOS as a Nscd replacement. On top of the
+user/group interfaces supported by the upstream project, this fork
+implements the network host-related operations.
+
+We intend to merge these extra features to the upstream repository,
+see the [upstream PR](https://github.com/twosigma/nsncd/pull/71) for
+more information. In the meantime, this repository is considered as
+the canonical one for Nixpkgs.
+
 ## Why?
 
 `nsncd` can be used in situations where you want to make an application use nss
