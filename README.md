@@ -4,14 +4,11 @@
 
 ## Notes About the Nix-Community Fork
 
-We use this fork in NixOS as a Nscd replacement. On top of the
-user/group interfaces supported by the upstream project, this fork
-implements the network host-related operations.
+We use nsncd in NixOS as a nscd replacement.
 
-We intend to merge these extra features to the upstream repository,
-see the [upstream PR](https://github.com/twosigma/nsncd/pull/71) for
-more information. In the meantime, this repository is considered as
-the canonical one for Nixpkgs.
+This repo was used until support for host lookups ended in the upstream project.
+Considering this support [landed upstream](https://github.com/twosigma/nsncd/pull/71),
+this fork is inactive.
 
 ## Why?
 
